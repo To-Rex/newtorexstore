@@ -1,0 +1,36 @@
+name: torexstore
+description: "Torex Local Storage - Test and benchmark application"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # Torex Local Storage package (mono repo)
+  torex_local_store:
+    path: TorexLocalStore
+
+  # Path provider for platform-specific directories
+  path_provider: ^2.1.5
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^6.0.0
+
+  # FFI support
+  ffi: ^2.1.4
+
+  # For integration tests
+  integration_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true
