@@ -40,4 +40,22 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
   end
+
+  # Force-load the Rust static library so dlsym(RTLD_DEFAULT, ...) can find
+  # flutter_rust_bridge symbols at runtime. We directly patch the generated
+  # Pods-Runner xcconfig files since modifying project build settings won't
+  # override the xcconfig that CocoaPods generates.
+  lib_path = '${PODS_ROOT}/../.symlinks/plugins/torex_local_store/ios/Classes/libtorex_local_store.a'
+  flag = "-force_load #{lib_path}"
+  xcconfig_dir = installer.sandbox.target_support_files_dir('Pods-Runner')
+  if xcconfig_dir
+    Dir.glob("#{xcconfig_dir}/*.xcconfig").each do |path|
+      content = File.read(path)
+      unless content.include?(flag)
+        content.gsub!(/OTHER_LDFLAGS = \$\(inherited\)/, "OTHER_LDFLAGS = $(inherited) #{flag}")
+        File.write(path, content)
+        Pod::UI.puts "  Patched #{File.basename(path)} with #{flag}"
+      end
+    end
+  end
 end

@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:torex_local_store/torex_local_store.dart';
 
 void main() {
@@ -33,50 +32,30 @@ class BenchmarkPage extends StatefulWidget {
 }
 
 class _BenchmarkPageState extends State<BenchmarkPage> {
-  TorexStore? _store;
   bool _isLoading = false;
-  String _status = 'Not initialized';
+  String _status = 'Ready — no initialization required';
   final List<String> _benchmarkResults = [];
+  final List<String> _consoleLogs = [];
 
-  @override
-  void dispose() {
-    _store?.close();
-    super.dispose();
-  }
-
-  Future<void> _initStore() async {
+  void _log(String message) {
+    final timestamp = DateTime.now().toIso8601String().substring(11, 23);
+    final line = '[$timestamp] $message';
+    debugPrint(line);
     setState(() {
-      _isLoading = true;
-      _status = 'Initializing...';
+      _consoleLogs.insert(0, line);
+      // Keep last 200 lines
+      if (_consoleLogs.length > 200) {
+        _consoleLogs.removeRange(200, _consoleLogs.length);
+      }
     });
-
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      final path = '${dir.path}/torex_benchmark_db';
-      _store = await TorexStore.open(path: path);
-
-      setState(() {
-        _status = 'Store opened at: $path';
-        _isLoading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _status = 'Error: $e';
-        _isLoading = false;
-      });
-    }
   }
 
   Future<void> _runBenchmark(String name, Future<void> Function() fn) async {
-    if (_store == null) {
-      setState(() => _status = 'Store not initialized!');
-      return;
-    }
-
     setState(() {
       _isLoading = true;
       _status = 'Running: $name...';
     });
+    _log('▶ START: $name');
 
     final stopwatch = Stopwatch()..start();
     try {
@@ -84,76 +63,102 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
       stopwatch.stop();
 
       final result = '$name: ${stopwatch.elapsedMilliseconds}ms';
+      _log('✔ DONE: $result');
       setState(() {
         _benchmarkResults.add(result);
         _status = 'Completed: $name';
         _isLoading = false;
       });
-    } catch (e) {
+    } catch (e, stackTrace) {
       stopwatch.stop();
+      final result = '$name: FAILED - $e';
+      _log('✘ ERROR: $result');
+      _log('  Stack: $stackTrace');
       setState(() {
-        _benchmarkResults.add('$name: FAILED - $e');
+        _benchmarkResults.add(result);
         _status = 'Error in $name: $e';
         _isLoading = false;
       });
     }
   }
 
+  // ─── Zero-Config Benchmarks ────────────────────────────────────
+
   Future<void> _benchmarkWrite() async {
     await _runBenchmark('Write 10,000 entries', () async {
-      final box = _store!.box('benchmark');
+      final box = Torex.box('benchmark');
+      _log('  Using box: benchmark (auto-initialized)');
       for (int i = 0; i < 10000; i++) {
         await box.put('key_$i', 'value_$i');
+        if (i % 2500 == 0) {
+          _log('  Write progress: $i / 10000');
+        }
       }
+      _log('  Write complete: 10000 entries');
     });
   }
 
   Future<void> _benchmarkRead() async {
     await _runBenchmark('Read 10,000 entries', () async {
-      final box = _store!.box('benchmark');
+      final box = Torex.box('benchmark');
+      int found = 0;
       for (int i = 0; i < 10000; i++) {
-        await box.get('key_$i');
+        final val = await box.get('key_$i');
+        if (val != null) found++;
+        if (i % 2500 == 0) {
+          _log('  Read progress: $i / 10000 (found: $found)');
+        }
       }
+      _log('  Read complete: $found / 10000 found');
     });
   }
 
   Future<void> _benchmarkRandomRead() async {
     await _runBenchmark('Random read 10,000 entries', () async {
-      final box = _store!.box('benchmark');
+      final box = Torex.box('benchmark');
       final random = Random(42);
+      int found = 0;
       for (int i = 0; i < 10000; i++) {
         final key = 'key_${random.nextInt(10000)}';
-        await box.get(key);
+        final val = await box.get(key);
+        if (val != null) found++;
       }
+      _log('  Random read: $found / 10000 found');
     });
   }
 
   Future<void> _benchmarkDelete() async {
     await _runBenchmark('Delete 5,000 entries', () async {
-      final box = _store!.box('benchmark');
+      final box = Torex.box('benchmark');
       for (int i = 0; i < 5000; i++) {
         await box.delete('key_$i');
       }
+      _log('  Delete complete: 5000 entries removed');
     });
   }
 
   Future<void> _benchmarkBatchWrite() async {
     await _runBenchmark('Batch write 10,000 entries', () async {
-      final box = _store!.box('batch_bench');
+      final box = Torex.box('batch_bench');
       final entries = List.generate(
         10000,
         (i) => ('batch_key_$i', 'batch_value_$i'),
       );
-      await box.batchPut(entries);
+      _log('  Batch size: ${entries.length} entries');
+      await box.batchPutStrings(entries);
+      _log('  Batch write complete');
     });
   }
 
   Future<void> _benchmarkExists() async {
     await _runBenchmark('Exists check 10,000 entries', () async {
-      final box = _store!.box('benchmark');
+      final box = Torex.box('benchmark');
+      int exists = 0;
       for (int i = 0; i < 10000; i++) {
-        await box.exists('key_$i');
+        final e = await box.exists('key_$i');
+        if (e) exists++;
       }
+      _log('  Exists: $exists / 10000');
     });
   }
 
@@ -161,6 +166,13 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
     setState(() {
       _benchmarkResults.clear();
       _status = 'Results cleared';
+    });
+    _log('Results cleared');
+  }
+
+  void _clearConsole() {
+    setState(() {
+      _consoleLogs.clear();
     });
   }
 
@@ -171,78 +183,132 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
         title: const Text('Torex Local Storage Benchmark'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      body: SafeArea(
         child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // Status bar
+            // ─── Status Bar ─────────────────────────────────────────
             Container(
+              width: double.infinity,
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
                 color: Colors.grey.shade200,
-                borderRadius: BorderRadius.circular(8),
+                border: Border(bottom: BorderSide(color: Colors.grey.shade300)),
               ),
               child: Text(
                 _status,
                 style: const TextStyle(fontSize: 14, fontFamily: 'monospace'),
               ),
             ),
-            const SizedBox(height: 16),
 
-            // Initialize button
-            ElevatedButton.icon(
-              onPressed: _isLoading ? null : _initStore,
-              icon: const Icon(Icons.folder_open),
-              label: const Text('Initialize Store'),
+            // ─── Info Banner ────────────────────────────────────────
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(8),
+              color: Colors.blue.shade50,
+              child: const Text(
+                '✨ Zero-config: No open/close required. Just use Torex.box("name").put(key, value)',
+                style: TextStyle(fontSize: 12, color: Colors.blue),
+              ),
             ),
-            const SizedBox(height: 8),
 
-            // Benchmark buttons
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                _buildBenchmarkButton('Write 10K', _benchmarkWrite),
-                _buildBenchmarkButton('Read 10K', _benchmarkRead),
-                _buildBenchmarkButton('Random Read', _benchmarkRandomRead),
-                _buildBenchmarkButton('Delete 5K', _benchmarkDelete),
-                _buildBenchmarkButton('Batch Write', _benchmarkBatchWrite),
-                _buildBenchmarkButton('Exists 10K', _benchmarkExists),
-                _buildBenchmarkButton('Clear', _clearResults),
-              ],
+            // ─── Benchmark Buttons ──────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  _buildBenchmarkButton('Write 10K', _benchmarkWrite),
+                  _buildBenchmarkButton('Read 10K', _benchmarkRead),
+                  _buildBenchmarkButton('Random Read', _benchmarkRandomRead),
+                  _buildBenchmarkButton('Delete 5K', _benchmarkDelete),
+                  _buildBenchmarkButton('Batch Write', _benchmarkBatchWrite),
+                  _buildBenchmarkButton('Exists 10K', _benchmarkExists),
+                  _buildBenchmarkButton('Clear Results', _clearResults),
+                ],
+              ),
             ),
-            const SizedBox(height: 16),
 
-            // Results
-            const Text(
-              'Benchmark Results:',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
+            // ─── Results Summary (scrollable) ────────────────────────
+            if (_benchmarkResults.isNotEmpty)
+              Container(
+                width: double.infinity,
+                height: 120,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                color: Colors.green.shade50,
+                child: ListView(
+                  children: [
+                    const Text(
+                      'Results:',
+                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green),
+                    ),
+                    ..._benchmarkResults.map((r) => Text(
+                      r,
+                      style: const TextStyle(fontSize: 11, fontFamily: 'monospace', color: Colors.green),
+                    )),
+                  ],
+                ),
+              ),
+
+            // ─── Console Log ────────────────────────────────────────
             Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.black87,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: ListView.builder(
-                  itemCount: _benchmarkResults.length,
-                  itemBuilder: (context, index) {
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 2),
-                      child: Text(
-                        _benchmarkResults[index],
-                        style: const TextStyle(
-                          color: Colors.greenAccent,
-                          fontFamily: 'monospace',
-                          fontSize: 13,
+              child: Column(
+                children: [
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    color: Colors.grey.shade800,
+                    child: Row(
+                      children: [
+                        const Text(
+                          'Console',
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white70),
                         ),
+                        const Spacer(),
+                        GestureDetector(
+                          onTap: _clearConsole,
+                          child: const Text(
+                            'Clear',
+                            style: TextStyle(fontSize: 11, color: Colors.white38),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: Container(
+                      color: Colors.black87,
+                      child: ListView.builder(
+                        padding: const EdgeInsets.all(8),
+                        itemCount: _consoleLogs.length,
+                        itemBuilder: (context, index) {
+                          final log = _consoleLogs[index];
+                          Color color = Colors.greenAccent;
+                          if (log.contains('✘') || log.contains('ERROR')) {
+                            color = Colors.redAccent;
+                          } else if (log.contains('▶')) {
+                            color = Colors.yellowAccent;
+                          } else if (log.contains('✔')) {
+                            color = Colors.greenAccent;
+                          } else {
+                            color = Colors.white60;
+                          }
+                          return Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 1),
+                            child: Text(
+                              log,
+                              style: TextStyle(
+                                color: color,
+                                fontFamily: 'monospace',
+                                fontSize: 11,
+                              ),
+                            ),
+                          );
+                        },
                       ),
-                    );
-                  },
-                ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ],
