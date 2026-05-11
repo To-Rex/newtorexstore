@@ -1,6 +1,6 @@
 PODS:
   - Flutter (1.0.0)
-  - torex_local_store (0.1.0):
+  - torex_local_store (0.1.6):
     - Flutter
 
 DEPENDENCIES:
@@ -15,7 +15,7 @@ EXTERNAL SOURCES:
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
-  torex_local_store: c10db859f4b0390d0eacc567cf659cbdc42e8620
+  torex_local_store: bd3006519749cda36a55402447fe540ca66472bb
 
 PODFILE CHECKSUM: e1796601fda8e9c78e1932719cca047816e47908
 
