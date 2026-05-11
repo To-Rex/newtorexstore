@@ -4,6 +4,8 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:torex_local_store/torex_local_store.dart';
 
+import 'pages/crud_page.dart';
+
 void main() {
   runApp(const TorexStoreApp());
 }
@@ -14,12 +16,53 @@ class TorexStoreApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Torex Local Storage - Benchmark',
+      title: 'Torex Local Storage',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: const BenchmarkPage(),
+      home: const _RootPage(),
+    );
+  }
+}
+
+// ─── Root page with BottomNavigationBar ───────────────────────────────────────
+
+class _RootPage extends StatefulWidget {
+  const _RootPage();
+
+  @override
+  State<_RootPage> createState() => _RootPageState();
+}
+
+class _RootPageState extends State<_RootPage> {
+  int _tab = 0;
+
+  static const _pages = [
+    BenchmarkPage(),
+    CrudPage(),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: IndexedStack(index: _tab, children: _pages),
+      bottomNavigationBar: NavigationBar(
+        selectedIndex: _tab,
+        onDestinationSelected: (i) => setState(() => _tab = i),
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.speed_outlined),
+            selectedIcon: Icon(Icons.speed_rounded),
+            label: 'Benchmark',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.storage_outlined),
+            selectedIcon: Icon(Icons.storage_rounded),
+            label: 'Ma\'lumotlar',
+          ),
+        ],
+      ),
     );
   }
 }
@@ -145,7 +188,7 @@ class _BenchmarkPageState extends State<BenchmarkPage> {
         (i) => ('batch_key_$i', 'batch_value_$i'),
       );
       _log('  Batch size: ${entries.length} entries');
-      await box.batchPutStrings(entries);
+      await box.batchPut(entries);
       _log('  Batch write complete');
     });
   }

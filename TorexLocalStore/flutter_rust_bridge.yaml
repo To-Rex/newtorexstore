@@ -1,0 +1,5 @@
+# flutter_rust_bridge v2 configuration for TorexLocalStore
+rust_input: crate::api
+rust_root: rust/
+dart_output: lib/src/rust
+c_output: ios/Classes/bridge_generated.h

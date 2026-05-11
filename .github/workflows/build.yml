@@ -1,0 +1,367 @@
+name: Build & Test
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  FLUTTER_VERSION: '3.29.3'
+
+jobs:
+  # ============================================================
+  # Rust Core: Test + Clippy + Bench
+  # ============================================================
+  rust-test:
+    name: Rust Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            TorexLocalStore/rust/target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('TorexLocalStore/rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Run tests
+        working-directory: TorexLocalStore/rust
+        run: cargo test --target ${{ matrix.target }} -- --nocapture
+
+      - name: Run clippy
+        working-directory: TorexLocalStore/rust
+        run: cargo clippy --target ${{ matrix.target }} -- -D warnings
+
+  # ============================================================
+  # Rust Benchmarks
+  # ============================================================
+  rust-bench:
+    name: Rust Benchmarks
+    runs-on: ubuntu-latest
+    needs: rust-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            TorexLocalStore/rust/target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('TorexLocalStore/rust/Cargo.lock') }}
+
+      - name: Run benchmarks
+        working-directory: TorexLocalStore/rust
+        run: cargo bench -- --save-baseline main
+
+  # ============================================================
+  # Flutter Analyze + Test
+  # ============================================================
+  flutter-test:
+    name: Flutter Analyze & Test
+    runs-on: ubuntu-latest
+    needs: rust-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Install dependencies (TorexLocalStore)
+        working-directory: TorexLocalStore
+        run: flutter pub get
+
+      - name: Flutter analyze
+        run: flutter analyze
+
+      - name: Flutter test
+        run: flutter test
+
+  # ============================================================
+  # Build Native Libraries for All Platforms
+  # ============================================================
+  build-android:
+    name: Build Android (ARM64, ARM, x86_64)
+    runs-on: ubuntu-latest
+    needs: rust-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+
+      - name: Build Android ARM64
+        working-directory: TorexLocalStore/rust
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          TARGET_CC: aarch64-linux-android21-clang
+        run: cargo ndk -t arm64-v8a build --release
+
+      - name: Build Android ARM
+        working-directory: TorexLocalStore/rust
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: cargo ndk -t armeabi-v7a build --release
+
+      - name: Build Android x86_64
+        working-directory: TorexLocalStore/rust
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: cargo ndk -t x86_64 build --release
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-native-libs
+          path: |
+            TorexLocalStore/rust/target/aarch64-linux-android/release/libtorex_local_store.so
+            TorexLocalStore/rust/target/armv7-linux-androideabi/release/libtorex_local_store.so
+            TorexLocalStore/rust/target/x86_64-linux-android/release/libtorex_local_store.so
+
+  build-ios:
+    name: Build iOS (ARM64 + Simulator)
+    runs-on: macos-latest
+    needs: rust-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Build iOS ARM64 (device)
+        working-directory: TorexLocalStore/rust
+        run: cargo build --release --target aarch64-apple-ios
+
+      - name: Build iOS ARM64 (simulator)
+        working-directory: TorexLocalStore/rust
+        run: cargo build --release --target aarch64-apple-ios-sim
+
+      - name: Build iOS x86_64 (simulator)
+        working-directory: TorexLocalStore/rust
+        run: cargo build --release --target x86_64-apple-ios
+
+      - name: Create universal iOS library
+        working-directory: TorexLocalStore/rust
+        run: |
+          mkdir -p ../ios
+          lipo -create \
+            target/aarch64-apple-ios/release/libtorex_local_store.a \
+            -output ../ios/libtorex_local_store.a
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libtorex_local_store.a \
+            target/x86_64-apple-ios/release/libtorex_local_store.a \
+            -output ../ios/libtorex_local_store_sim.a
+
+      - name: Upload iOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-native-libs
+          path: |
+            TorexLocalStore/ios/libtorex_local_store.a
+            TorexLocalStore/ios/libtorex_local_store_sim.a
+
+  build-macos:
+    name: Build macOS (ARM64 + x86_64)
+    runs-on: macos-latest
+    needs: rust-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build macOS ARM64
+        working-directory: TorexLocalStore/rust
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Build macOS x86_64
+        working-directory: TorexLocalStore/rust
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Create universal macOS library
+        working-directory: TorexLocalStore/rust
+        run: |
+          mkdir -p ../macos
+          lipo -create \
+            target/aarch64-apple-darwin/release/libtorex_local_store.a \
+            target/x86_64-apple-darwin/release/libtorex_local_store.a \
+            -output ../macos/libtorex_local_store.a
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-native-libs
+          path: TorexLocalStore/macos/libtorex_local_store.a
+
+  build-linux:
+    name: Build Linux (x86_64)
+    runs-on: ubuntu-latest
+    needs: rust-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libclang-dev
+
+      - name: Build Linux x86_64
+        working-directory: TorexLocalStore/rust
+        run: cargo build --release --target x86_64-unknown-linux-gnu
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-native-libs
+          path: TorexLocalStore/rust/target/x86_64-unknown-linux-gnu/release/libtorex_local_store.a
+
+  build-windows:
+    name: Build Windows (x86_64)
+    runs-on: windows-latest
+    needs: rust-test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install Clang
+        run: |
+          choco install llvm -y
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $GITHUB_ENV
+
+      - name: Build Windows x86_64
+        working-directory: TorexLocalStore/rust
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-libs
+          path: TorexLocalStore/rust/target/x86_64-pc-windows-msvc/release/torex_local_store.lib
+
+  # ============================================================
+  # Generate flutter_rust_bridge bindings
+  # ============================================================
+  generate-bindings:
+    name: Generate FFI Bindings
+    runs-on: ubuntu-latest
+    needs: [build-android, build-ios, build-macos, build-linux, build-windows, flutter-test]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install flutter_rust_bridge_codegen
+        run: cargo install flutter_rust_bridge_codegen
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Generate bindings
+        run: flutter_rust_bridge_codegen generate
+
+      - name: Upload generated bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-bindings
+          path: |
+            TorexLocalStore/lib/src/rust/
+
+  # ============================================================
+  # Package & Publish
+  # ============================================================
+  package:
+    name: Package for pub.dev
+    runs-on: ubuntu-latest
+    needs: [generate-bindings]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Organize native libraries
+        run: |
+          chmod +x TorexLocalStore/scripts/organize_artifacts.sh
+          cd TorexLocalStore && ./scripts/organize_artifacts.sh ../artifacts
+
+      - name: Validate package
+        working-directory: TorexLocalStore
+        run: |
+          dart pub publish --dry-run
+
+      - name: Upload packaged release
+        uses: actions/upload-artifact@v4
+        with:
+          name: torex-local-store-package
+          path: TorexLocalStore/

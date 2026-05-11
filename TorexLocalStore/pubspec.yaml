@@ -1,0 +1,67 @@
+name: torex_local_store
+description: "Ultra-high-performance local storage engine for Flutter powered by Rust. LSM-tree based, zero-copy reads, memory-mapped files, crash recovery, and reactive streams."
+version: 0.1.0
+homepage: https://github.com/torex/torexstore
+repository: https://github.com/torex/torexstore
+issue_tracker: https://github.com/torex/torexstore/issues
+documentation: https://github.com/torex/torexstore/blob/main/README.md
+
+topics:
+  - database
+  - storage
+  - rust
+  - ffi
+  - nosql
+
+platforms:
+  android:
+  ios:
+  macos:
+  linux:
+  windows:
+
+environment:
+  sdk: ^3.11.5
+  flutter: ">=3.29.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # flutter_rust_bridge for Rust FFI integration
+  flutter_rust_bridge: ^2.12.0
+
+  # Path provider for platform-specific directories
+  path_provider: ^2.1.5
+
+  # Path manipulation
+  path: ^1.9.1
+
+  # Meta annotations
+  meta: ^1.15.0
+
+  # FFI
+  ffi: ^2.1.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # Linting
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  plugin:
+    platforms:
+      android:
+        ffiPlugin: true
+      ios:
+        pluginClass: TorexLocalStorePlugin
+      macos:
+        pluginClass: TorexLocalStorePlugin
+      linux:
+        ffiPlugin: true
+      windows:
+        ffiPlugin: true

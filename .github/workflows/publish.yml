@@ -1,0 +1,217 @@
+name: Publish to pub.dev
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  FLUTTER_VERSION: '3.29.3'
+
+jobs:
+  # ============================================================
+  # Build all native libraries
+  # ============================================================
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+
+      - name: Build all Android targets
+        working-directory: TorexLocalStore/rust
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          cargo ndk -t arm64-v8a build --release
+          cargo ndk -t armeabi-v7a build --release
+          cargo ndk -t x86_64 build --release
+
+      - name: Upload Android libs
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-libs
+          path: |
+            TorexLocalStore/rust/target/aarch64-linux-android/release/libtorex_local_store.so
+            TorexLocalStore/rust/target/armv7-linux-androideabi/release/libtorex_local_store.so
+            TorexLocalStore/rust/target/x86_64-linux-android/release/libtorex_local_store.so
+
+  build-ios:
+    name: Build iOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios,x86_64-apple-ios,aarch64-apple-ios-sim
+
+      - name: Build iOS targets
+        working-directory: TorexLocalStore/rust
+        run: |
+          cargo build --release --target aarch64-apple-ios
+          cargo build --release --target aarch64-apple-ios-sim
+          cargo build --release --target x86_64-apple-ios
+
+      - name: Create universal iOS libraries
+        working-directory: TorexLocalStore/rust
+        run: |
+          mkdir -p ../ios
+          lipo -create \
+            target/aarch64-apple-ios/release/libtorex_local_store.a \
+            -output ../ios/libtorex_local_store.a
+          lipo -create \
+            target/aarch64-apple-ios-sim/release/libtorex_local_store.a \
+            target/x86_64-apple-ios/release/libtorex_local_store.a \
+            -output ../ios/libtorex_local_store_sim.a
+
+      - name: Upload iOS libs
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-libs
+          path: |
+            TorexLocalStore/ios/libtorex_local_store.a
+            TorexLocalStore/ios/libtorex_local_store_sim.a
+
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build macOS targets
+        working-directory: TorexLocalStore/rust
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+
+      - name: Create universal macOS library
+        working-directory: TorexLocalStore/rust
+        run: |
+          mkdir -p ../macos
+          lipo -create \
+            target/aarch64-apple-darwin/release/libtorex_local_store.a \
+            target/x86_64-apple-darwin/release/libtorex_local_store.a \
+            -output ../macos/libtorex_local_store.a
+
+      - name: Upload macOS libs
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-libs
+          path: TorexLocalStore/macos/libtorex_local_store.a
+
+  build-linux:
+    name: Build Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libclang-dev
+
+      - name: Build Linux
+        working-directory: TorexLocalStore/rust
+        run: cargo build --release
+
+      - name: Upload Linux libs
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-libs
+          path: TorexLocalStore/rust/target/release/libtorex_local_store.a
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Clang
+        run: |
+          choco install llvm -y
+
+      - name: Build Windows
+        working-directory: TorexLocalStore/rust
+        run: cargo build --release
+
+      - name: Upload Windows libs
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-libs
+          path: TorexLocalStore/rust/target/release/torex_local_store.lib
+
+  # ============================================================
+  # Generate bindings + publish
+  # ============================================================
+  publish:
+    name: Generate Bindings & Publish
+    runs-on: ubuntu-latest
+    needs: [build-android, build-ios, build-macos, build-linux, build-windows]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: 'stable'
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install flutter_rust_bridge_codegen
+        run: cargo install flutter_rust_bridge_codegen
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Organize native libraries
+        run: |
+          chmod +x TorexLocalStore/scripts/organize_artifacts.sh
+          cd TorexLocalStore && ./scripts/organize_artifacts.sh ../artifacts
+
+      - name: Generate flutter_rust_bridge bindings
+        run: flutter_rust_bridge_codegen generate
+
+      - name: Setup pub.dev credentials
+        run: |
+          mkdir -p ~/.config/dart
+          echo '${{ secrets.PUB_DEV_CREDENTIALS }}' > ~/.config/dart/pub-credentials.json
+
+      - name: Publish to pub.dev
+        working-directory: TorexLocalStore
+        run: dart pub publish --force

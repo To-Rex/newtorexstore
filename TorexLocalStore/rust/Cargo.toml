@@ -1,0 +1,79 @@
+[package]
+name = "torex_local_store"
+version = "0.1.0"
+edition = "2021"
+description = "Ultra-high-performance local storage engine for Flutter"
+license = "MIT"
+repository = "https://github.com/torex/torexstore"
+
+[lib]
+name = "torex_local_store"
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Memory-mapped file I/O
+memmap2 = "0.9"
+
+# High-performance concurrency primitives
+parking_lot = { version = "0.12", features = ["arc_lock", "deadlock_detection"] }
+
+# Fast hashing
+ahash = "0.8"
+
+# Compression
+lz4_flex = "0.11"
+
+# Binary serialization (zero-copy)
+flatbuffers = "24.12.23"
+
+# Efficient byte handling
+bytes = "1"
+
+# UUID generation
+uuid = { version = "1", features = ["v4", "fast-rng"] }
+
+# Cross-platform filesystem operations
+dirs = "6"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# Error handling
+thiserror = "2"
+anyhow = "1"
+
+# Date/time
+chrono = "0.4"
+
+# Small, efficient collections
+smallvec = "1"
+
+# Crossbeam for lock-free structures
+crossbeam = "0.8"
+
+# flutter_rust_bridge
+flutter_rust_bridge = "=2.12.0"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tempfile = "3"
+rand = "0.9"
+
+[profile.release]
+opt-level = 3
+lto = false
+codegen-units = 1
+strip = "none"
+panic = "abort"
+
+[profile.dev]
+opt-level = 0
+debug = true
+
+[[bench]]
+name = "storage_bench"
+harness = false
