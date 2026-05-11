@@ -1,8 +1,10 @@
 import FlutterMacOS
 
+@_silgen_name("frb_get_rust_content_hash")
+func frb_get_rust_content_hash() -> Int
+
 public class TorexLocalStorePlugin: NSObject, FlutterPlugin {
     public static func register(with registrar: FlutterPluginRegistrar) {
-        // Registration is handled by flutter_rust_bridge via FFI.
-        // This plugin class exists to satisfy Flutter plugin registration.
+        let _ = frb_get_rust_content_hash()
     }
 }

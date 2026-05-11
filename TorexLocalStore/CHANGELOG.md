@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 0.1.6
+
+**Fixed macOS crash on startup — Rust FFI symbols not linked in macOS plugin.**
+
+### Infrastructure
+- Fixed `dlsym(RTLD_DEFAULT, frb_get_rust_content_hash): symbol not found` on macOS
+- macOS `TorexLocalStorePlugin.register()` now calls `frb_get_rust_content_hash()` via `@_silgen_name`, matching iOS approach, to force-link Rust static library symbols
+- Cleaned up macOS podspec `source_files` pattern and `OTHER_LDFLAGS`
+
+---
+
 ## 0.1.5
 
 **Fixed Android read-only filesystem error — Torex runtime now initializes using Dart's path_provider instead of Rust's dirs crate.**

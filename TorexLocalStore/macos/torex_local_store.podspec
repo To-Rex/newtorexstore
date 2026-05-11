@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'torex_local_store'
-  s.version          = '0.1.0'
+  s.version          = '0.1.6'
   s.summary          = 'Ultra-high-performance local storage engine powered by Rust'
   s.description      = <<-DESC
 TorexLocalStore is an ultra-high-performance local storage engine for Flutter,
@@ -28,7 +28,7 @@ zero-copy reads, WAL crash recovery, and reactive streams.
 
   # Force load the static library to ensure all FFI symbols are available
   s.pod_target_xcconfig = {
-    'OTHER_LDFLAGS' => '-force_load $(PODS_TARGET_SRCROOT)/Classes/libtorex_local_store.a'
+    'OTHER_LDFLAGS' => '$(inherited) -force_load $(PODS_TARGET_SRCROOT)/Classes/libtorex_local_store.a'
   }
 
   s.dependency 'FlutterMacOS'

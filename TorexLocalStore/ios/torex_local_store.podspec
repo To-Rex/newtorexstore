@@ -1,6 +1,6 @@
 Pod::Spec.new do |s|
   s.name             = 'torex_local_store'
-  s.version          = '0.1.0'
+  s.version          = '0.1.6'
   s.summary          = 'Ultra-high-performance local storage engine powered by Rust'
   s.description      = <<-DESC
 TorexLocalStore is an ultra-high-performance local storage engine for Flutter,
