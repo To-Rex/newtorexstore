@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 0.1.5
+
+**Fixed Android read-only filesystem error — Torex runtime now initializes using Dart's path_provider instead of Rust's dirs crate.**
+
+### Infrastructure
+- Fixed Android runtime initialization on devices with read-only default paths
+- Torex runtime now uses `getApplicationDocumentsDirectory` from `path_provider` for correct writable path on all platforms
+- Removed unused Android Flutter embedding dependency and Kotlin config
+
+---
+
+## 0.1.4
+
+**Internal improvements and optimizations.**
+
+---
+
 ## 0.1.3
 
 **Internal improvements and bug fixes.**

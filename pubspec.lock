@@ -90,7 +90,7 @@ packages:
     source: hosted
     version: "1.3.3"
   ffi:
-    dependency: "direct dev"
+    dependency: transitive
     description:
       name: ffi
       sha256: "6d7fd89431262d8f3125e81b50d3847a091d846eafcd4fdb88dd06f36d705a45"
@@ -107,11 +107,6 @@ packages:
     version: "7.0.1"
   flutter:
     dependency: "direct main"
-    description: flutter
-    source: sdk
-    version: "0.0.0"
-  flutter_driver:
-    dependency: transitive
     description: flutter
     source: sdk
     version: "0.0.0"
@@ -136,11 +131,6 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
-  fuchsia_remote_debug_protocol:
-    dependency: transitive
-    description: flutter
-    source: sdk
-    version: "0.0.0"
   glob:
     dependency: transitive
     description:
@@ -157,11 +147,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.0.3"
-  integration_test:
-    dependency: "direct dev"
-    description: flutter
-    source: sdk
-    version: "0.0.0"
   jni:
     dependency: transitive
     description:
@@ -275,7 +260,7 @@ packages:
     source: hosted
     version: "1.9.1"
   path_provider:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: path_provider
       sha256: "50c5dd5b6e1aaf6fb3a78b33f6aa3afca52bf903a8a5298f53101fdaee55bbcd"
@@ -338,14 +323,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "2.1.8"
-  process:
-    dependency: transitive
-    description:
-      name: process
-      sha256: c6248e4526673988586e8c00bb22a49210c258dc91df5227d5da9748ecf79744
-      url: "https://pub.dev"
-    source: hosted
-    version: "5.0.5"
   pub_semver:
     dependency: transitive
     description:
@@ -399,14 +376,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.1"
-  sync_http:
-    dependency: transitive
-    description:
-      name: sync_http
-      sha256: "7f0cd72eca000d2e026bcd6f990b81d0ca06022ef4e32fb257b30d3d1014a961"
-      url: "https://pub.dev"
-    source: hosted
-    version: "0.3.1"
   term_glyph:
     dependency: transitive
     description:
@@ -429,7 +398,7 @@ packages:
       path: TorexLocalStore
       relative: true
     source: path
-    version: "0.1.0"
+    version: "0.1.4"
   typed_data:
     dependency: transitive
     description:
@@ -462,14 +431,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.1.1"
-  webdriver:
-    dependency: transitive
-    description:
-      name: webdriver
-      sha256: "2f3a14ca026957870cfd9c635b83507e0e51d8091568e90129fbf805aba7cade"
-      url: "https://pub.dev"
-    source: hosted
-    version: "3.1.0"
   xdg_directories:
     dependency: transitive
     description:

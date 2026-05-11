@@ -28,10 +28,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     sourceSets {
         getByName("main") {
             // Pre-built .so files from jniLibs directory
@@ -40,7 +36,4 @@ android {
     }
 }
 
-dependencies {
-    // Flutter embedding (provided by host app)
-    compileOnly("io.flutter:flutter_embedding_release:1.0.0-@FLUTTER_VERSION@")
-}
+

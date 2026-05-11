@@ -25,6 +25,9 @@ import 'rust/frb_generated.dart';
 /// Uses a Completer so concurrent calls all await the same Future safely.
 Completer<void>? _ffiInitCompleter;
 
+/// Optional custom path set via [Torex.initialize].
+String? _customTorexPath;
+
 /// Initializes the Rust FFI bridge exactly once.
 /// Safe to call concurrently from multiple isolates/widgets.
 Future<void> _ensureFfiInitialized() async {
@@ -40,11 +43,33 @@ Future<void> _ensureFfiInitialized() async {
     } else {
       await RustLib.init();
     }
+    await _ensureTorexInitialized();
     _ffiInitCompleter!.complete();
   } catch (e, st) {
     // Reset so the next call can retry
     final c = _ffiInitCompleter!;
     _ffiInitCompleter = null;
+    c.completeError(e, st);
+    rethrow;
+  }
+}
+
+/// One-time Torex runtime initialization guard.
+Completer<void>? _torexInitCompleter;
+
+/// Initializes the Torex runtime with the correct platform path.
+Future<void> _ensureTorexInitialized() async {
+  if (_torexInitCompleter != null) {
+    return _torexInitCompleter!.future;
+  }
+  _torexInitCompleter = Completer<void>();
+  try {
+    final path = _customTorexPath ?? await _defaultStoragePath();
+    await api.torexInitialize(path: path);
+    _torexInitCompleter!.complete();
+  } catch (e, st) {
+    final c = _torexInitCompleter!;
+    _torexInitCompleter = null;
     c.completeError(e, st);
     rethrow;
   }
@@ -178,9 +203,8 @@ class Torex {
   /// If [path] is omitted, uses [getApplicationDocumentsDirectory]/torex_store.
   /// Safe to call multiple times — subsequent calls are no-ops.
   static Future<void> initialize({String? path}) async {
+    _customTorexPath = path;
     await _ensureFfiInitialized();
-    final effectivePath = path ?? await _defaultStoragePath();
-    await api.torexInitialize(path: effectivePath);
   }
 
   /// Returns a [TorexBox] for the named collection.
