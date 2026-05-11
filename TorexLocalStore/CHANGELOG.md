@@ -6,6 +6,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## 0.1.3
+
+**Internal improvements and bug fixes.**
+
+---
+
+## 0.1.2
+
+**Fixed pub.dev score issues — improved static analysis, corrected repository URLs, included FRB-generated bindings in package.**
+
+### Infrastructure
+- Included FRB-generated Dart bindings (`lib/src/rust/`) in package to fix static analysis on pub.dev
+- Fixed homepage, repository, issue tracker and documentation URLs to point to correct GitHub repository
+- Resolved all Dart analysis warnings and lints
+
+---
+
+## 0.1.1
+
+**Internal improvements and bug fixes.**
+
+### Rust
+- Various internal engine improvements and optimizations.
+
+---
+
 ## 0.1.0
 
 **Initial release — ultra-high-performance embedded storage for Flutter.**

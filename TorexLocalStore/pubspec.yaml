@@ -1,10 +1,10 @@
 name: torex_local_store
 description: "Ultra-high-performance local storage engine for Flutter powered by Rust. LSM-tree based, zero-copy reads, memory-mapped files, crash recovery, and reactive streams."
-version: 0.1.0
-homepage: https://github.com/torex/torexstore
-repository: https://github.com/torex/torexstore
-issue_tracker: https://github.com/torex/torexstore/issues
-documentation: https://github.com/torex/torexstore/blob/main/README.md
+version: 0.1.3
+homepage: https://github.com/To-Rex/newtorexstore/tree/master/TorexLocalStore
+repository: https://github.com/To-Rex/newtorexstore/tree/master/TorexLocalStore
+issue_tracker: https://github.com/To-Rex/newtorexstore/issues
+documentation: https://github.com/To-Rex/newtorexstore/tree/master/TorexLocalStore#readme
 
 topics:
   - database

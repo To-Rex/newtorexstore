@@ -50,4 +50,4 @@ TorexLocalStore/target/
 Cargo.lock
 
 # flutter_rust_bridge generated
-lib/src/rust/
+# lib/src/rust/  # committed for pub.dev score

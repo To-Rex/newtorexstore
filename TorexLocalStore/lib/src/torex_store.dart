@@ -861,7 +861,10 @@ class _TorexWatchStream {
 
     controller = StreamController<api.TorexWatchEvent>(
       onListen: () => startPolling(),
-      onCancel: () => stopPolling(),
+      onCancel: () {
+        stopPolling();
+        controller.close();
+      },
     );
 
     return controller.stream;
@@ -920,7 +923,7 @@ class TorexStore {
 
   void _checkOpen() {
     if (!_isOpen) {
-      throw TorexException('TorexStore is not open. Call open() first.');
+      throw const TorexException('TorexStore is not open. Call open() first.');
     }
   }
 }
