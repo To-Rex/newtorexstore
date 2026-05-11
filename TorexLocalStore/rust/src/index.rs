@@ -11,7 +11,7 @@
 //! - **Bloom filter support**: Quickly reject non-existent keys (future)
 //! - **Sorted iteration**: Supports range scans via segment indexes
 
-use std::collections::HashMap;
+use ahash::AHashMap;
 
 /// Location of a key in a segment.
 #[derive(Debug, Clone)]
@@ -26,7 +26,7 @@ pub struct KeyLocation {
 /// In-memory sparse index mapping keys to their locations.
 pub struct SparseIndex {
     /// Maps key bytes to their most recent location.
-    index: HashMap<Vec<u8>, KeyLocation>,
+    index: AHashMap<Vec<u8>, KeyLocation>,
 
     /// Sampling interval: index every Nth key.
     sample_interval: usize,
@@ -36,7 +36,7 @@ impl SparseIndex {
     /// Creates a new sparse index with the given sampling interval.
     pub fn new(sample_interval: usize) -> Self {
         Self {
-            index: HashMap::new(),
+            index: AHashMap::new(),
             sample_interval,
         }
     }
@@ -78,10 +78,7 @@ impl SparseIndex {
 
     /// Rebuilds the index from segment metadata.
     /// Called during startup and after compaction.
-    pub fn rebuild_from_segments(
-        &mut self,
-        segments: &[(u64, Vec<(Vec<u8>, u64)>)],
-    ) {
+    pub fn rebuild_from_segments(&mut self, segments: &[(u64, Vec<(Vec<u8>, u64)>)]) {
         self.index.clear();
 
         // Process segments oldest-first so newer entries overwrite older ones
@@ -176,10 +173,7 @@ mod tests {
         let segments = vec![
             (
                 0u64,
-                vec![
-                    (b"key1".to_vec(), 100u64),
-                    (b"key2".to_vec(), 200u64),
-                ],
+                vec![(b"key1".to_vec(), 100u64), (b"key2".to_vec(), 200u64)],
             ),
             (
                 1u64,

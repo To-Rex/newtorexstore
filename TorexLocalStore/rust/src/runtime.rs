@@ -140,8 +140,17 @@ pub fn ensure_initialized() -> Result<Arc<TorexEngine>> {
 /// Called automatically on process exit via `Drop`.
 /// Can be called manually for graceful shutdown.
 pub fn shutdown() -> Result<()> {
-    let mut guard = RUNTIME.lock();
-    if guard.take().is_some() {
+    // Extract RuntimeState while holding the lock, then release the lock
+    // BEFORE dropping the state. Workers call is_initialized() → RUNTIME.lock()
+    // during their shutdown loop; holding the lock while joining them deadlocks.
+    let state = {
+        let mut guard = RUNTIME.lock();
+        guard.take()
+        // ← lock released here when `guard` drops
+    };
+    // RuntimeState is dropped here, AFTER the lock is released.
+    // Workers can now acquire the lock, see is_initialized() == false, and exit.
+    if state.is_some() {
         log::info!("Torex runtime shut down.");
     }
     Ok(())
@@ -324,8 +333,13 @@ mod tests {
     use tempfile::TempDir;
 
     fn cleanup_runtime() {
-        let mut guard = RUNTIME.lock();
-        guard.take();
+        // Same lock-before-drop fix as shutdown(): release lock, THEN drop state.
+        let _state = {
+            let mut guard = RUNTIME.lock();
+            guard.take()
+            // ← lock released here
+        };
+        // _state (RuntimeState) dropped here after lock is released
     }
 
     #[test]

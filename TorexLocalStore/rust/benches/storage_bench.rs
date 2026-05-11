@@ -192,6 +192,119 @@ fn bench_mixed(c: &mut Criterion) {
     group.finish();
 }
 
+// ── large dataset ─────────────────────────────────────────────────────────────
+
+fn bench_large_dataset(c: &mut Criterion) {
+    let dir = TempDir::new().unwrap();
+    let store = make_store(&dir);
+
+    // Pre-populate 100 K entries (batch for speed)
+    {
+        let entries: Vec<(Vec<u8>, Vec<u8>)> = (0u64..100_000)
+            .map(|i| {
+                (
+                    format!("lk_{:08}", i).into_bytes(),
+                    b"value_16bytes!!!".to_vec(),
+                )
+            })
+            .collect();
+        let refs: Vec<(&[u8], &[u8])> = entries
+            .iter()
+            .map(|(k, v)| (k.as_slice(), v.as_slice()))
+            .collect();
+        store.batch_put(&refs).unwrap();
+        store.flush_memtable().unwrap(); // push to segment so mmap is active
+    }
+
+    let mut group = c.benchmark_group("large_dataset_100k");
+    group.sample_size(20);
+
+    // Point get from 100K segment dataset
+    group.bench_function("get_hit", |b| {
+        let mut i = 0u64;
+        b.iter(|| {
+            let key = format!("lk_{:08}", i % 100_000);
+            store.get(black_box(key.as_bytes())).unwrap();
+            i += 1;
+        });
+    });
+
+    // Miss check (Bloom filter should short-circuit)
+    group.bench_function("get_miss", |b| {
+        b.iter(|| {
+            store.get(black_box(b"nonexistent_key_xxxxxx")).unwrap();
+        });
+    });
+
+    // Prefix scan on large dataset
+    group.bench_function("scan_prefix_1k_results", |b| {
+        b.iter(|| {
+            store
+                .prefix_scan(black_box(b"lk_0000"), Some(1_000))
+                .unwrap()
+        });
+    });
+
+    group.finish();
+}
+
+// ── concurrent throughput ────────────────────────────────────────────────────
+
+fn bench_concurrent_throughput(c: &mut Criterion) {
+    use std::sync::Arc;
+    use std::thread;
+
+    let dir = TempDir::new().unwrap();
+    let store = Arc::new(make_store(&dir));
+
+    // Seed 10K entries
+    {
+        let entries: Vec<(Vec<u8>, Vec<u8>)> = (0u64..10_000)
+            .map(|i| (format!("ck_{:06}", i).into_bytes(), b"init".to_vec()))
+            .collect();
+        let refs: Vec<(&[u8], &[u8])> = entries
+            .iter()
+            .map(|(k, v)| (k.as_slice(), v.as_slice()))
+            .collect();
+        store.batch_put(&refs).unwrap();
+    }
+
+    let mut group = c.benchmark_group("concurrent");
+    // Each iteration spawns 4 writer + 4 reader threads doing 25 ops each -> 200 ops/iter
+    group.throughput(Throughput::Elements(200));
+    group.sample_size(20);
+
+    group.bench_function("4r_4w_200ops", |b| {
+        b.iter(|| {
+            let mut handles = vec![];
+
+            for t in 0u64..4 {
+                let s = Arc::clone(&store);
+                handles.push(thread::spawn(move || {
+                    for i in 0u64..25 {
+                        let k = format!("ck_{:06}", (t * 2500 + i) % 10_000);
+                        s.put(k.as_bytes(), b"upd").unwrap();
+                    }
+                }));
+            }
+            for t in 0u64..4 {
+                let s = Arc::clone(&store);
+                handles.push(thread::spawn(move || {
+                    for i in 0u64..25 {
+                        let k = format!("ck_{:06}", (t * 2500 + i) % 10_000);
+                        s.get(k.as_bytes()).unwrap();
+                    }
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+        });
+    });
+
+    group.finish();
+}
+
 // ── registration ─────────────────────────────────────────────────────────────
 
 criterion_group!(
@@ -202,5 +315,7 @@ criterion_group!(
     bench_delete,
     bench_batch_delete,
     bench_mixed,
+    bench_large_dataset,
+    bench_concurrent_throughput,
 );
 criterion_main!(benches);

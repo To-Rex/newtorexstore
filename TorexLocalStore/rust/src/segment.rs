@@ -25,6 +25,7 @@
 //! ```
 
 use crate::bloom::BloomFilter;
+use ahash::AHashMap;
 use memmap2::{Mmap, MmapOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -46,6 +47,8 @@ pub struct Segment {
     mmap: Option<Mmap>,
     /// Bloom filter for O(1) negative lookups — avoids binary search on misses.
     bloom: BloomFilter,
+    /// Hash index for O(1) key→offset lookups (complements the sorted Vec for range scans).
+    hash_index: AHashMap<Vec<u8>, u64>,
     /// Filesystem path to the segment file.
     pub path: PathBuf,
 
@@ -130,10 +133,12 @@ impl Segment {
         // SAFETY: file is freshly written, no other writers, mmap covers full file
         let mmap = unsafe { MmapOptions::new().map(&file).ok() };
 
-        // Build bloom filter from all inserted keys — O(1) miss detection on reads
+        // Build bloom filter + hash index in one pass
         let mut bloom = BloomFilter::new(entry_count.max(1) as usize);
-        for (key, _) in &index_entries {
+        let mut hash_index = AHashMap::with_capacity(index_entries.len());
+        for (key, offset) in &index_entries {
             bloom.insert(key);
+            hash_index.insert(key.clone(), *offset);
         }
 
         let file_size = buf.len() as u64;
@@ -141,6 +146,7 @@ impl Segment {
         Ok(Segment {
             mmap,
             bloom,
+            hash_index,
             path: path.to_path_buf(),
             id,
             entry_count,
@@ -225,15 +231,18 @@ impl Segment {
             index_entries.push((key, offset));
         }
 
-        // Rebuild bloom filter from index — fast to build, avoids storing in file
+        // Rebuild bloom filter + hash index in one pass
         let mut bloom = BloomFilter::new(index_entries.len().max(1));
-        for (key, _) in &index_entries {
+        let mut hash_index = AHashMap::with_capacity(index_entries.len());
+        for (key, offset) in &index_entries {
             bloom.insert(key);
+            hash_index.insert(key.clone(), *offset);
         }
 
         Ok(Segment {
             mmap,
             bloom,
+            hash_index,
             path: path.to_path_buf(),
             id,
             entry_count,
@@ -242,21 +251,18 @@ impl Segment {
         })
     }
 
-    /// Looks up a key in this segment using binary search on the index.
+    /// Looks up a key in this segment using the hash index for O(1) exact lookup.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        // O(1) bloom check — definitively eliminates ~99% of misses
-        // with no binary search and no mmap access
+        // Fast path 1: bloom filter — O(1), eliminates ~99% of misses with no I/O
         if !self.bloom.might_contain(key) {
             return Ok(None);
         }
 
-        let idx = match self.index.binary_search_by(|(k, _)| k.as_slice().cmp(key)) {
-            Ok(i) => i,
-            Err(_) => return Ok(None),
-        };
-
-        let (_, offset) = &self.index[idx];
-        self.read_entry_at(*offset)
+        // Fast path 2: hash index — O(1) exact lookup, replaces O(log n) binary search
+        match self.hash_index.get(key) {
+            Some(&offset) => self.read_entry_at(offset),
+            None => Ok(None),
+        }
     }
 
     /// Reads and decodes an entry at the given file offset.
@@ -409,6 +415,46 @@ impl SegmentManager {
             segments,
             next_id: max_id + 1,
         })
+    }
+
+    /// Returns the next segment ID that will be assigned, without consuming it.
+    #[inline]
+    pub fn peek_next_id(&self) -> u64 {
+        self.next_id
+    }
+
+    /// Returns the segment storage directory.
+    #[inline]
+    pub fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
+
+    /// Reserves and returns the next segment ID (increments internal counter).
+    /// Used by compaction to pre-allocate an ID before creating the file outside
+    /// the write lock.
+    pub fn take_next_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    /// Inserts a pre-built segment (created outside the lock) into the manager.
+    /// The internal list is kept sorted by segment ID.
+    pub fn add_prebuilt_segment(&mut self, segment: Segment) {
+        let pos = self.segments.partition_point(|s| s.id < segment.id);
+        self.segments.insert(pos, segment);
+    }
+
+    /// Removes segments from the in-memory list and returns their file paths.
+    /// Does NOT delete files — caller is responsible for cleanup outside any lock.
+    pub fn remove_segments_from_memory(&mut self, ids: &[u64]) -> Vec<std::path::PathBuf> {
+        let mut paths = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(pos) = self.segments.iter().position(|s| s.id == id) {
+                paths.push(self.segments.remove(pos).path);
+            }
+        }
+        paths
     }
 
     /// Creates a new segment from a flushed memtable.

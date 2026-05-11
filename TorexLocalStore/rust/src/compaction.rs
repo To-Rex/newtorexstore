@@ -22,6 +22,7 @@
 //! - New segments may be created during compaction
 //! - Only the compacted segments are locked during swap
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use parking_lot::RwLock;
@@ -72,10 +73,13 @@ pub struct CompactionResult {
     pub bytes_reclaimed: u64,
 }
 
-/// Compacts segments by merging them into a single new segment.
+/// Compacts segments with minimized write-lock duration.
 ///
-/// Takes a list of segment paths, reads all entries, merges them
-/// (keeping only the newest value for each key), and writes a new segment.
+/// The write lock is held for only two brief phases:
+///  1. Reserving the new segment ID
+///  2. Swapping old segments for the new one in memory
+///
+/// All disk I/O (reading, merging, writing) happens outside any lock.
 pub fn compact_segments(
     segment_manager: &Arc<RwLock<SegmentManager>>,
     config: &CompactionConfig,
@@ -84,40 +88,49 @@ pub fn compact_segments(
         return Ok(None);
     }
 
-    // Find segments eligible for compaction
-    let (segment_ids, segment_paths, total_old_size) = {
-        let mgr = segment_manager.read();
+    // ── Phase 1: Plan — brief write lock to reserve next segment ID ──────────
+    let (segment_ids, segment_paths, total_old_size, seg_dir, new_segment_id) = {
+        let mut mgr = segment_manager.write();
         let all_segments = mgr.segments();
 
         if all_segments.len() < config.min_segments {
             return Ok(None);
         }
 
-        // Take up to max_segments_to_compact oldest segments
         let count = config.max_segments_to_compact.min(all_segments.len());
         let ids: Vec<u64> = all_segments[..count].iter().map(|s| s.id).collect();
-        let paths: Vec<std::path::PathBuf> = all_segments[..count].iter().map(|s| s.path.clone()).collect();
+        let paths: Vec<PathBuf> = all_segments[..count]
+            .iter()
+            .map(|s| s.path.clone())
+            .collect();
         let size: u64 = all_segments[..count].iter().map(|s| s.file_size).sum();
-        (ids, paths, size)
-    };
+        let dir = mgr.directory().to_path_buf();
+        let new_id = mgr.take_next_id(); // Reserve ID atomically
+        (ids, paths, size, dir, new_id)
+    }; // ← Write lock released
 
     if segment_ids.is_empty() {
         return Ok(None);
     }
 
-    // Re-open segments for reading (avoids Clone requirement)
-    let segments_to_compact: Vec<Segment> = segment_ids.iter()
+    // ── Phase 2: Read + merge — NO LOCK HELD ────────────────────────────────
+    let segments_to_compact: Vec<Segment> = segment_ids
+        .iter()
         .zip(segment_paths.iter())
         .filter_map(|(&id, path)| Segment::open(path, id).ok())
         .collect();
 
-    // Read all entries from segments (oldest first, newer entries overwrite)
     let merged = merge_segment_entries(&segments_to_compact)?;
 
     if merged.is_empty() {
-        // All entries were tombstones, just remove old segments
-        let mut mgr = segment_manager.write();
-        mgr.remove_segments(&segment_ids)?;
+        // All tombstones — remove old segments, write nothing
+        let paths_to_delete = {
+            let mut mgr = segment_manager.write();
+            mgr.remove_segments_from_memory(&segment_ids)
+        };
+        for path in paths_to_delete {
+            let _ = std::fs::remove_file(&path);
+        }
         return Ok(Some(CompactionResult {
             segments_compacted: segments_to_compact.len(),
             removed_segment_ids: segment_ids,
@@ -127,32 +140,45 @@ pub fn compact_segments(
         }));
     }
 
-    // Create new merged segment
-    let new_id = {
+    // ── Phase 3: Create new segment file — NO LOCK HELD ──────────────────────
+    let new_path = seg_dir.join(format!("{}.seg", new_segment_id));
+    let new_segment = match Segment::create(&new_path, new_segment_id, &merged) {
+        Ok(seg) => seg,
+        Err(e) => {
+            // Creation failed — clean up partial file, leave old segments intact
+            let _ = std::fs::remove_file(&new_path);
+            return Err(e);
+        }
+    };
+    let new_size = new_segment.file_size;
+    let entries_count = merged.len();
+
+    // ── Phase 4: Swap — brief write lock for pointer update only ─────────────
+    let paths_to_delete = {
         let mut mgr = segment_manager.write();
-        let new_seg = mgr.create_segment(&merged)?;
-        let new_id = new_seg.id;
+        mgr.add_prebuilt_segment(new_segment);
+        mgr.remove_segments_from_memory(&segment_ids)
+    }; // ← Write lock released
 
-        // Remove old segments
-        mgr.remove_segments(&segment_ids)?;
+    // ── Phase 5: Delete old files outside lock ────────────────────────────────
+    for path in &paths_to_delete {
+        if let Err(e) = std::fs::remove_file(path) {
+            log::warn!("Failed to delete compacted segment {:?}: {}", path, e);
+        }
+    }
 
-        new_id
-    };
-
-    let new_size = {
-        let mgr = segment_manager.read();
-        mgr.segments()
-            .iter()
-            .find(|s| s.id == new_id)
-            .map(|s| s.file_size)
-            .unwrap_or(0)
-    };
+    log::debug!(
+        "Compaction: {} segments → 1, {} entries, {} bytes reclaimed",
+        segments_to_compact.len(),
+        entries_count,
+        total_old_size.saturating_sub(new_size),
+    );
 
     Ok(Some(CompactionResult {
         segments_compacted: segments_to_compact.len(),
         removed_segment_ids: segment_ids,
-        new_segment_id: new_id,
-        entries_in_new_segment: merged.len(),
+        new_segment_id,
+        entries_in_new_segment: entries_count,
         bytes_reclaimed: total_old_size.saturating_sub(new_size),
     }))
 }
@@ -162,7 +188,8 @@ pub fn compact_segments(
 /// Reads all segments (oldest first), newer entries overwrite older ones.
 /// Tombstones are preserved (they indicate deletion).
 fn merge_segment_entries(segments: &[Segment]) -> Result<Vec<(Vec<u8>, MemtableEntry)>> {
-    let mut merged: std::collections::BTreeMap<Vec<u8>, MemtableEntry> = std::collections::BTreeMap::new();
+    let mut merged: std::collections::BTreeMap<Vec<u8>, MemtableEntry> =
+        std::collections::BTreeMap::new();
 
     for segment in segments {
         let entries = segment.read_all()?;
@@ -211,7 +238,11 @@ mod tests {
         }
 
         let segment_count_before = store.segment_count();
-        assert!(segment_count_before >= 4, "Expected >= 4 segments, got {}", segment_count_before);
+        assert!(
+            segment_count_before >= 4,
+            "Expected >= 4 segments, got {}",
+            segment_count_before
+        );
 
         // Create a shared segment manager for compaction
         // We need to access the internal segment manager

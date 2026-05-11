@@ -130,7 +130,7 @@ impl Storage {
     ///
     /// Lookup order: memtable → segments (newest first)
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        // 1. Check memtable first
+        // 1. Check memtable first (O(1) BTreeMap lookup)
         {
             let mt = self.memtable.read();
             match mt.get(key) {
@@ -140,9 +140,13 @@ impl Storage {
             }
         }
 
-        // 2. Check segments using mmap
+        // 2. Check segments via mmap (zero-copy read)
         let segments = self.segments.read();
-        segments.get(key)
+        match segments.get(key)? {
+            // Empty value in a segment = tombstone marker (key was deleted and flushed)
+            Some(v) if v.is_empty() => Ok(None),
+            result => Ok(result),
+        }
     }
 
     /// Deletes a key.
@@ -688,5 +692,237 @@ mod tests {
         assert_eq!(results.len(), 2);
         assert_eq!(results[0].key, b"k1");
         assert_eq!(results[1].key, b"k3");
+    }
+
+    // ── Concurrent stress tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_concurrent_reads_and_writes() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let mut config = TorexConfig::new(dir.path().join("concurrent_test"));
+        config.sync_writes = false;
+        let store = Arc::new(Storage::open(config).unwrap());
+
+        // Pre-populate 1 000 keys
+        for i in 0u64..1_000 {
+            store
+                .put(format!("key_{:06}", i).as_bytes(), b"initial_value")
+                .unwrap();
+        }
+
+        let mut handles = vec![];
+
+        // 4 writer threads — 500 puts each
+        for t in 0u64..4 {
+            let s = Arc::clone(&store);
+            handles.push(thread::spawn(move || {
+                for i in 0u64..500 {
+                    let key = format!("key_{:06}", (t * 500 + i) % 1_000);
+                    s.put(key.as_bytes(), b"updated_by_writer").unwrap();
+                }
+            }));
+        }
+
+        // 4 reader threads — 500 gets each
+        for t in 0u64..4 {
+            let s = Arc::clone(&store);
+            handles.push(thread::spawn(move || {
+                for i in 0u64..500 {
+                    let key = format!("key_{:06}", (t * 125 + i) % 1_000);
+                    // Just ensure no panic / data race
+                    let _ = s.get(key.as_bytes()).unwrap();
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        // All 1 000 original keys should still be readable
+        for i in 0u64..1_000 {
+            let val = store.get(format!("key_{:06}", i).as_bytes()).unwrap();
+            assert!(
+                val.is_some(),
+                "key_{:06} disappeared after concurrent stress",
+                i
+            );
+        }
+    }
+
+    #[test]
+    fn test_concurrent_batch_operations() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let mut config = TorexConfig::new(dir.path().join("batch_concurrent_test"));
+        config.sync_writes = false;
+        let store = Arc::new(Storage::open(config).unwrap());
+
+        let mut handles = vec![];
+
+        // 4 threads each batch-putting 250 entries
+        for t in 0u64..4 {
+            let s = Arc::clone(&store);
+            handles.push(thread::spawn(move || {
+                let entries: Vec<(Vec<u8>, Vec<u8>)> = (0u64..250)
+                    .map(|i| {
+                        let k = format!("bt_{:04}", t * 250 + i).into_bytes();
+                        let v = format!("val_{}", i).into_bytes();
+                        (k, v)
+                    })
+                    .collect();
+                let refs: Vec<(&[u8], &[u8])> = entries
+                    .iter()
+                    .map(|(k, v)| (k.as_slice(), v.as_slice()))
+                    .collect();
+                s.batch_put(&refs).unwrap();
+            }));
+        }
+
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        // All 1 000 entries should be present
+        let count = store.count().unwrap();
+        assert!(count >= 1_000, "expected >=1000 entries, got {}", count);
+    }
+
+    // ── WAL crash recovery tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_wal_crash_recovery_basic() {
+        let dir = TempDir::new().unwrap();
+        let config = TorexConfig::new(dir.path().join("crash_recovery"));
+
+        // Phase 1: write data, then drop WITHOUT calling close()
+        //          (simulates a crash — WAL not truncated, no explicit flush)
+        {
+            let store = Storage::open(config.clone()).unwrap();
+            for i in 0u64..100 {
+                store
+                    .put(
+                        format!("cr_key_{:04}", i).as_bytes(),
+                        format!("cr_val_{}", i).as_bytes(),
+                    )
+                    .unwrap();
+            }
+            // Intentionally drop without store.close() — WAL remains intact
+        }
+
+        // WAL file must exist after the "crash"
+        assert!(
+            config.path.join("wal.log").exists(),
+            "WAL file should exist after crash"
+        );
+
+        // Phase 2: reopen — engine must replay WAL and restore all 100 entries
+        {
+            let store = Storage::open(config.clone()).unwrap();
+            for i in 0u64..100 {
+                let val = store.get(format!("cr_key_{:04}", i).as_bytes()).unwrap();
+                assert!(
+                    val.is_some(),
+                    "cr_key_{:04} should have been recovered from WAL",
+                    i
+                );
+                let got = String::from_utf8(val.unwrap()).unwrap();
+                assert_eq!(
+                    got,
+                    format!("cr_val_{}", i),
+                    "recovered value mismatch for cr_key_{:04}",
+                    i
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_wal_crash_recovery_with_deletes() {
+        let dir = TempDir::new().unwrap();
+        let config = TorexConfig::new(dir.path().join("crash_del_recovery"));
+
+        {
+            let store = Storage::open(config.clone()).unwrap();
+            // Write 50 keys
+            for i in 0u64..50 {
+                store
+                    .put(format!("d_key_{:03}", i).as_bytes(), b"some_value")
+                    .unwrap();
+            }
+            // Delete first 25
+            for i in 0u64..25 {
+                store.delete(format!("d_key_{:03}", i).as_bytes()).unwrap();
+            }
+            // Drop without close — both puts and deletes are in WAL
+        }
+
+        // Reopen and verify
+        {
+            let store = Storage::open(config).unwrap();
+            for i in 0u64..25 {
+                assert!(
+                    store
+                        .get(format!("d_key_{:03}", i).as_bytes())
+                        .unwrap()
+                        .is_none(),
+                    "deleted key d_key_{:03} should not be present after recovery",
+                    i
+                );
+            }
+            for i in 25u64..50 {
+                assert!(
+                    store
+                        .get(format!("d_key_{:03}", i).as_bytes())
+                        .unwrap()
+                        .is_some(),
+                    "live key d_key_{:03} should be present after recovery",
+                    i
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_recovery_after_flush_and_crash() {
+        let dir = TempDir::new().unwrap();
+        let config = TorexConfig::new(dir.path().join("flush_crash_recovery"));
+
+        {
+            let store = Storage::open(config.clone()).unwrap();
+            // Write first batch and flush to segment
+            for i in 0u64..50 {
+                store
+                    .put(format!("fk_{:03}", i).as_bytes(), b"flushed_val")
+                    .unwrap();
+            }
+            store.flush_memtable().unwrap(); // Creates segment, truncates WAL
+
+            // Write second batch without flush (stays in WAL)
+            for i in 50u64..100 {
+                store
+                    .put(format!("fk_{:03}", i).as_bytes(), b"wal_val")
+                    .unwrap();
+            }
+            // Crash — WAL has 50 entries, segment has 50 entries
+        }
+
+        // Reopen — both segment entries and WAL entries must be present
+        {
+            let store = Storage::open(config).unwrap();
+            for i in 0u64..100 {
+                let val = store.get(format!("fk_{:03}", i).as_bytes()).unwrap();
+                assert!(
+                    val.is_some(),
+                    "fk_{:03} missing after flush+crash recovery",
+                    i
+                );
+            }
+        }
     }
 }
